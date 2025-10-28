@@ -3,27 +3,27 @@
   Creates a bootable Ubuntu 24.04.1 Live Server USB and copies setup scripts.
 
 .DESCRIPTION
-  - Prompts for the USB drive letter (e.g. E:)
+  - Prompts for the USB drive letter (e.g. E)
   - Confirms wipe before continuing
-  - Downloads the Ubuntu 24.04.1 ISO if missing
+  - Automatically locates or downloads the Ubuntu 24.04.1 ISO
   - Formats the USB drive FAT32 (MBR)
   - Copies ISO contents and setup files from GitHub repo
-  - Makes the USB bootable
+  - Makes the USB bootable (Windows native)
 
 .NOTES
-  Run as Administrator.
+  Run PowerShell as Administrator.
 #>
 
 $ErrorActionPreference = "Stop"
 
 # --- Variables ---
-$IsoUrl = "https://releases.ubuntu.com/24.04.1/ubuntu-24.04.1-live-server-amd64.iso"
 $IsoName = "ubuntu-24.04.1-live-server-amd64.iso"
+$IsoUrl  = "https://releases.ubuntu.com/24.04.1/$IsoName"
 $WorkDir = "$PSScriptRoot\UbuntuUSB"
 $RepoUrl = "https://github.com/gpcola/ARC-AIO-Server-Sunshine-Steam-Ollama-Media-No-IP-Ubuntu-24.04-.git"
 
 # --- Prompt for drive letter ---
-$UsbDrive = Read-Host "Enter the USB drive letter (e.g. E)"
+$UsbDrive = Read-Host "Enter the USB drive letter (for example E)"
 if (-not (Test-Path "$UsbDrive`:")) {
   Write-Host "Drive $UsbDrive`: not found." -ForegroundColor Red
   exit 1
@@ -40,42 +40,46 @@ if ($confirm -ne "YES") {
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 Set-Location $WorkDir
 
-# --- Download ISO if not already present ---
-if (-not (Test-Path "$IsoName")) {
-  Write-Host "==> Downloading Ubuntu 24.04.1 Live Server ISO..."
-  Invoke-WebRequest -Uri $IsoUrl -OutFile $IsoName
+# --- Locate or download Ubuntu ISO automatically ---
+$IsoPath = Join-Path $WorkDir $IsoName
+if (-not (Test-Path $IsoPath)) {
+  Write-Host "==> Ubuntu ISO not found. Downloading..."
+  Invoke-WebRequest -Uri $IsoUrl -OutFile $IsoPath
 } else {
-  Write-Host "==> Found existing ISO. Skipping download."
+  Write-Host "==> Found local ISO at $IsoPath"
 }
 
 # --- Unmount ISO if previously mounted ---
-$mounts = Get-DiskImage | Where-Object {$_.ImagePath -like "*$IsoName"}
+$mounts = Get-DiskImage | Where-Object { $_.ImagePath -like "*$IsoName" }
 if ($mounts) { Dismount-DiskImage -ImagePath $mounts.ImagePath }
 
-# --- Mount ISO ---
+# --- Mount ISO automatically ---
 Write-Host "==> Mounting ISO..."
-$iso = Mount-DiskImage -ImagePath "$WorkDir\$IsoName" -PassThru
+$iso = Mount-DiskImage -ImagePath $IsoPath -PassThru
 $isoDrive = ($iso | Get-Volume).DriveLetter + ":"
 Write-Host "ISO mounted at $isoDrive"
 
-# --- Format USB ---
+# --- Format USB drive ---
 Write-Host "==> Formatting USB drive..."
-Get-Disk | Where-Object {$_.FriendlyName -match "$UsbDrive"} | Out-Null
 Format-Volume -DriveLetter $UsbDrive -FileSystem FAT32 -Force -Confirm:$false
 
-# --- Copy ISO contents ---
+# --- Copy ISO contents to USB ---
 Write-Host "==> Copying ISO contents..."
 robocopy "$isoDrive\" "$UsbDrive`:\" /E
 
 # --- Unmount ISO ---
-Dismount-DiskImage -ImagePath "$WorkDir\$IsoName"
+Dismount-DiskImage -ImagePath $IsoPath
 
 # --- Clone GitHub repo ---
-Write-Host "==> Cloning setup scripts..."
+Write-Host "==> Cloning setup scripts from GitHub..."
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Host "Git not found, installing via winget..."
+    winget install --id Git.Git -e
+}
 git clone $RepoUrl "$WorkDir\repo"
 robocopy "$WorkDir\repo" "$UsbDrive`:\setup" /E
 
-# --- Make bootable ---
+# --- Make USB bootable ---
 Write-Host "==> Making USB bootable..."
 bootsect /nt60 "$UsbDrive`:" /mbr
 bcdboot "$UsbDrive`:\boot" /s "$UsbDrive`:"
